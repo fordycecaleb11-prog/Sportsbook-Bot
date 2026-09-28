@@ -1,49 +1,41 @@
 import requests
+import json
 
-URL = "https://gamma-api.polymarket.com/events"
+SPORTS_URL = "https://gamma-api.polymarket.com/sports"
+MARKET_TYPES_URL = "https://gamma-api.polymarket.com/sports/market-types"
 
-params = {
-    "limit": 1000,
-    "active": "true",
-    "closed": "false",
-}
+print("Fetching Polymarket sports metadata...\n")
 
-response = requests.get(URL, params=params, timeout=30)
-response.raise_for_status()
+sports_response = requests.get(SPORTS_URL, timeout=30)
+sports_response.raise_for_status()
 
-events = response.json()
+sports = sports_response.json()
 
-print(f"Pulled {len(events)} active events.\n")
+print(f"Found {len(sports)} sports.\n")
 
-search_terms = ["Eagles", "Bears"]
+# Find anything that appears to be NFL / American football
+nfl_results = []
 
-matches = []
+for sport in sports:
+    text = json.dumps(sport).lower()
 
-for event in events:
-    title = event.get("title", "")
-    slug = event.get("slug", "")
+    if "nfl" in text:
+        nfl_results.append(sport)
 
-    combined = f"{title} {slug}".lower()
+print(f"Found {len(nfl_results)} NFL metadata entries.\n")
 
-    # Require BOTH teams
-    if all(term.lower() in combined for term in search_terms):
-        matches.append(event)
-
-print(f"Found {len(matches)} Eagles/Bears events.\n")
-
-for event in matches:
+for sport in nfl_results:
     print("=" * 70)
-    print("TITLE:", event.get("title"))
-    print("SLUG:", event.get("slug"))
-    print("START:", event.get("startDate"))
-    print("END:", event.get("endDate"))
+    print(json.dumps(sport, indent=2))
 
-    for market in event.get("markets", []):
-        print()
-        print("  QUESTION:", market.get("question"))
-        print("  OUTCOMES:", market.get("outcomes"))
-        print("  PRICES:", market.get("outcomePrices"))
-        print("  ACTIVE:", market.get("active"))
-        print("  CLOSED:", market.get("closed"))
+
+print("\nFetching valid sports market types...\n")
+
+types_response = requests.get(MARKET_TYPES_URL, timeout=30)
+types_response.raise_for_status()
+
+market_types = types_response.json()
+
+print(json.dumps(market_types, indent=2))
 
 print("\nDiagnostic complete.")
