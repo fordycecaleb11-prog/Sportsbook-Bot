@@ -3,8 +3,22 @@ import json
 
 EVENTS_URL = "https://gamma-api.polymarket.com/events"
 
+NFL_TEAMS = [
+    "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens",
+    "Buffalo Bills", "Carolina Panthers", "Chicago Bears",
+    "Cincinnati Bengals", "Cleveland Browns", "Dallas Cowboys",
+    "Denver Broncos", "Detroit Lions", "Green Bay Packers",
+    "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars",
+    "Kansas City Chiefs", "Las Vegas Raiders", "Los Angeles Chargers",
+    "Los Angeles Rams", "Miami Dolphins", "Minnesota Vikings",
+    "New England Patriots", "New Orleans Saints", "New York Giants",
+    "New York Jets", "Philadelphia Eagles", "Pittsburgh Steelers",
+    "San Francisco 49ers", "Seattle Seahawks", "Tampa Bay Buccaneers",
+    "Tennessee Titans", "Washington Commanders"
+]
+
 params = {
-    "limit": 100,
+    "limit": 500,
     "active": "true",
     "closed": "false",
     "tag_slug": "nfl",
@@ -15,37 +29,70 @@ response.raise_for_status()
 
 events = response.json()
 
-print(f"Found {len(events)} active NFL events.\n")
+print(f"Pulled {len(events)} NFL-tagged events.\n")
+
+game_events = []
 
 for event in events:
-    print("=" * 70)
-    print("EVENT:", event.get("title"))
-    print("SLUG:", event.get("slug"))
+    title = event.get("title", "")
 
-    markets = event.get("markets", [])
+    # Find NFL teams appearing in the event title
+    teams_found = [
+        team for team in NFL_TEAMS
+        if team.lower() in title.lower()
+    ]
 
-    print(f"MARKETS: {len(markets)}")
+    # A weekly matchup should contain two NFL teams
+    if len(teams_found) != 2:
+        continue
 
-    for market in markets:
-        print("\n  QUESTION:", market.get("question"))
+    markets = []
+
+    for market in event.get("markets", []):
+        if market.get("closed") is True:
+            continue
+
+        if market.get("active") is False:
+            continue
 
         outcomes = market.get("outcomes")
         prices = market.get("outcomePrices")
 
-        # Polymarket sometimes returns these as JSON strings
         try:
             if isinstance(outcomes, str):
                 outcomes = json.loads(outcomes)
 
             if isinstance(prices, str):
                 prices = json.loads(prices)
-        except json.JSONDecodeError:
-            pass
+        except (json.JSONDecodeError, TypeError):
+            continue
 
-        print("  OUTCOMES:", outcomes)
-        print("  PRICES:", prices)
-        print("  ACTIVE:", market.get("active"))
-        print("  CLOSED:", market.get("closed"))
+        markets.append({
+            "question": market.get("question"),
+            "outcomes": outcomes,
+            "prices": prices,
+        })
+
+    if markets:
+        game_events.append({
+            "title": title,
+            "teams": teams_found,
+            "markets": markets,
+        })
+
+
+print(f"Found {len(game_events)} possible NFL GAME events.\n")
+
+for event in game_events:
+
+    print("=" * 70)
+    print("GAME:", event["title"])
+    print("TEAMS:", event["teams"])
+
+    for market in event["markets"]:
+        print("\n  QUESTION:", market["question"])
+        print("  OUTCOMES:", market["outcomes"])
+        print("  PRICES:", market["prices"])
 
 print("\n" + "=" * 70)
-print("Polymarket NFL connection successful.")
+print("NFL game filtering complete.")
