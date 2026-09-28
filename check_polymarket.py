@@ -3,10 +3,9 @@ import requests
 URL = "https://gamma-api.polymarket.com/events"
 
 params = {
-    "limit": 500,
+    "limit": 1000,
     "active": "true",
     "closed": "false",
-    "tag_slug": "nfl",
 }
 
 response = requests.get(URL, params=params, timeout=30)
@@ -14,34 +13,37 @@ response.raise_for_status()
 
 events = response.json()
 
-print(f"Pulled {len(events)} NFL-tagged events.\n")
+print(f"Pulled {len(events)} active events.\n")
 
-possible_games = []
+search_terms = ["Eagles", "Bears"]
+
+matches = []
 
 for event in events:
     title = event.get("title", "")
-    lower = title.lower()
+    slug = event.get("slug", "")
 
-    if (
-        " vs " in lower
-        or " vs. " in lower
-        or " @ " in lower
-        or " versus " in lower
-    ):
-        possible_games.append(event)
+    combined = f"{title} {slug}".lower()
 
-print(f"Found {len(possible_games)} matchup-looking events.\n")
+    # Require BOTH teams
+    if all(term.lower() in combined for term in search_terms):
+        matches.append(event)
 
-for event in possible_games:
+print(f"Found {len(matches)} Eagles/Bears events.\n")
+
+for event in matches:
     print("=" * 70)
     print("TITLE:", event.get("title"))
     print("SLUG:", event.get("slug"))
-    print("END DATE:", event.get("endDate"))
+    print("START:", event.get("startDate"))
+    print("END:", event.get("endDate"))
 
     for market in event.get("markets", []):
+        print()
         print("  QUESTION:", market.get("question"))
         print("  OUTCOMES:", market.get("outcomes"))
         print("  PRICES:", market.get("outcomePrices"))
+        print("  ACTIVE:", market.get("active"))
         print("  CLOSED:", market.get("closed"))
 
 print("\nDiagnostic complete.")
