@@ -15,10 +15,13 @@ ODDS_URL = (
 )
 
 NFL_SERIES_ID = 12185
-MIN_ARB_ROI = 0.01
-PAPER_STAKE = 100.00
 
-# Converts Polymarket short team names to sportsbook full names.
+# Paper-testing settings
+MIN_ARB_ROI = 0.01       # 1.00%
+PAPER_STAKE = 100.00
+TOP_RESULTS = 10
+
+
 TEAM_MAP = {
     "49ers": "San Francisco 49ers",
     "Bears": "Chicago Bears",
@@ -56,6 +59,8 @@ TEAM_MAP = {
 
 
 def american_decimal(odds):
+    """Convert American odds to decimal odds."""
+
     if odds > 0:
         return 1 + (odds / 100)
 
@@ -63,13 +68,17 @@ def american_decimal(odds):
 
 
 def parse_time(value):
+    """Convert API timestamps to UTC datetime objects."""
+
     if not value:
         return None
 
     value = str(value).replace(" ", "T").replace("+00", "+00:00")
 
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
 
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -81,6 +90,8 @@ def parse_time(value):
 
 
 def get_polymarket_games():
+    """Get active NFL moneyline markets from Polymarket."""
+
     params = {
         "series_id": NFL_SERIES_ID,
         "active": "true",
@@ -88,12 +99,17 @@ def get_polymarket_games():
         "limit": 100,
     }
 
-    r = requests.get(POLY_URL, params=params, timeout=30)
-    r.raise_for_status()
+    response = requests.get(
+        POLY_URL,
+        params=params,
+        timeout=30,
+    )
+
+    response.raise_for_status()
 
     games = []
 
-    for event in r.json():
+    for event in response.json():
 
         for market in event.get("markets", []):
 
@@ -113,41 +129,56 @@ def get_polymarket_games():
                 if isinstance(prices, str):
                     prices = json.loads(prices)
 
-                if len(outcomes) != 2 or len(prices) != 2:
+                if len(outcomes) != 2:
                     continue
 
-                full_teams = [
-                    TEAM_MAP.get(outcomes[0]),
-                    TEAM_MAP.get(outcomes[1]),
-                ]
-
-                if None in full_teams:
+                if len(prices) != 2:
                     continue
 
-                prices = [float(prices[0]), float(prices[1])]
+                team_a = TEAM_MAP.get(outcomes[0])
+                team_b = TEAM_MAP.get(outcomes[1])
 
-                # Reject malformed prices.
-                if any(p <= 0 or p >= 1 for p in prices):
+                if not team_a or not team_b:
+                    continue
+
+                price_a = float(prices[0])
+                price_b = float(prices[1])
+
+                if not 0 < price_a < 1:
+                    continue
+
+                if not 0 < price_b < 1:
                     continue
 
                 games.append({
                     "title": event.get("title"),
-                    "teams": full_teams,
+                    "teams": [
+                        team_a,
+                        team_b,
+                    ],
                     "short_teams": outcomes,
-                    "prices": prices,
+                    "prices": [
+                        price_a,
+                        price_b,
+                    ],
                     "start": parse_time(
                         market.get("gameStartTime")
                         or event.get("endDate")
                     ),
                 })
 
-            except (ValueError, TypeError, json.JSONDecodeError):
+            except (
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+            ):
                 continue
 
     return games
 
 
 def get_sportsbook_games():
+    """Get current NFL moneylines from sportsbooks."""
 
     params = {
         "apiKey": ODDS_API_KEY,
@@ -156,13 +187,19 @@ def get_sportsbook_games():
         "oddsFormat": "american",
     }
 
-    r = requests.get(ODDS_URL, params=params, timeout=30)
-    r.raise_for_status()
+    response = requests.get(
+        ODDS_URL,
+        params=params,
+        timeout=30,
+    )
 
-    return r.json()
+    response.raise_for_status()
+
+    return response.json()
 
 
 def same_game(poly, book):
+    """Verify that both feeds refer to the same game."""
 
     poly_teams = set(poly["teams"])
 
@@ -175,51 +212,69 @@ def same_game(poly, book):
         return False
 
     poly_time = poly["start"]
-    book_time = parse_time(book.get("commence_time"))
+    book_time = parse_time(
+        book.get("commence_time")
+    )
 
     if poly_time and book_time:
+
         difference = abs(
             (poly_time - book_time).total_seconds()
         )
 
-        # Allow up to 3 hours in case one feed has
-        # scheduling/time discrepancies.
+        # Reject games whose listed start times
+        # differ by more than 3 hours.
         if difference > 10800:
             return False
 
     return True
 
 
-def calculate_arb(poly_price, american_odds):
+def calculate_comparison(poly_price, american_odds):
+    """
+    Calculate the theoretical return from:
 
-    sportsbook_decimal = american_decimal(american_odds)
+    1. Buying one outcome on Polymarket
+    2. Betting the opposite outcome at a sportsbook
 
-    # $1 Polymarket share costs poly_price and pays $1.
-    #
-    # For equal payout:
-    # sportsbook_stake * decimal_odds = polymarket_shares
-    #
-    # Solve for total cost needed to guarantee $1 payout.
+    Stakes are sized so either outcome produces
+    the same gross payout.
+    """
 
-    cost_per_guaranteed_dollar = (
-        poly_price + (1 / sportsbook_decimal)
+    decimal_odds = american_decimal(
+        american_odds
     )
 
-    if cost_per_guaranteed_dollar >= 1:
-        return None
+    # Cost required to guarantee $1 of payout.
+    cost_per_dollar = (
+        poly_price
+        + (1 / decimal_odds)
+    )
 
     guaranteed_payout = (
-        PAPER_STAKE / cost_per_guaranteed_dollar
+        PAPER_STAKE
+        / cost_per_dollar
     )
 
-    poly_stake = poly_price * guaranteed_payout
+    poly_stake = (
+        poly_price
+        * guaranteed_payout
+    )
 
     sportsbook_stake = (
-        guaranteed_payout / sportsbook_decimal
+        guaranteed_payout
+        / decimal_odds
     )
 
-    profit = guaranteed_payout - PAPER_STAKE
-    roi = profit / PAPER_STAKE
+    profit = (
+        guaranteed_payout
+        - PAPER_STAKE
+    )
+
+    roi = (
+        profit
+        / PAPER_STAKE
+    )
 
     return {
         "poly_stake": poly_stake,
@@ -230,20 +285,60 @@ def calculate_arb(poly_price, american_odds):
     }
 
 
+def make_comparison(
+    poly,
+    poly_team,
+    poly_price,
+    book_team,
+    book_odds,
+    bookmaker,
+):
+    """Create one cross-market comparison."""
+
+    result = calculate_comparison(
+        poly_price,
+        book_odds,
+    )
+
+    return {
+        "game": poly["title"],
+        "poly_team": poly_team,
+        "poly_price": poly_price,
+        "book_team": book_team,
+        "book_odds": book_odds,
+        "book": bookmaker,
+        **result,
+    }
+
+
 def main():
 
-    print("POLYMARKET × SPORTSBOOK PAPER ARB SCANNER")
+    print(
+        "POLYMARKET × SPORTSBOOK "
+        "PAPER ARB SCANNER V2"
+    )
+
     print("=" * 70)
 
     poly_games = get_polymarket_games()
     book_games = get_sportsbook_games()
 
-    print(f"Polymarket moneylines: {len(poly_games)}")
-    print(f"Sportsbook games:      {len(book_games)}")
+    print(
+        f"Polymarket moneylines: "
+        f"{len(poly_games)}"
+    )
+
+    print(
+        f"Sportsbook games:      "
+        f"{len(book_games)}"
+    )
+
     print()
 
     matched_games = 0
     combinations = 0
+
+    all_comparisons = []
     opportunities = []
 
     for poly in poly_games:
@@ -261,79 +356,194 @@ def main():
             poly_a = poly["prices"][0]
             poly_b = poly["prices"][1]
 
-            for bookmaker in book.get("bookmakers", []):
+            for bookmaker in book.get(
+                "bookmakers",
+                [],
+            ):
 
-                for market in bookmaker.get("markets", []):
+                for market in bookmaker.get(
+                    "markets",
+                    [],
+                ):
 
                     if market.get("key") != "h2h":
                         continue
 
                     odds = {
-                        outcome["name"]: outcome["price"]
-                        for outcome in market.get("outcomes", [])
+                        outcome["name"]:
+                        outcome["price"]
+
+                        for outcome
+                        in market.get(
+                            "outcomes",
+                            [],
+                        )
                     }
 
-                    if team_a not in odds or team_b not in odds:
+                    if team_a not in odds:
                         continue
 
-                    # Direction 1:
-                    # Polymarket A + sportsbook B
+                    if team_b not in odds:
+                        continue
+
+                    book_name = bookmaker.get(
+                        "title",
+                        "Unknown",
+                    )
+
+                    # --------------------------------
+                    # Direction 1
+                    #
+                    # Polymarket Team A
+                    # +
+                    # Sportsbook Team B
+                    # --------------------------------
+
                     combinations += 1
 
-                    arb = calculate_arb(
+                    comparison = make_comparison(
+                        poly,
+                        team_a,
                         poly_a,
+                        team_b,
                         odds[team_b],
+                        book_name,
                     )
 
-                    if arb and arb["roi"] >= MIN_ARB_ROI:
+                    all_comparisons.append(
+                        comparison
+                    )
 
-                        opportunities.append({
-                            "game": poly["title"],
-                            "poly_team": team_a,
-                            "poly_price": poly_a,
-                            "book_team": team_b,
-                            "book_odds": odds[team_b],
-                            "book": bookmaker["title"],
-                            **arb,
-                        })
+                    if (
+                        comparison["roi"]
+                        >= MIN_ARB_ROI
+                    ):
+                        opportunities.append(
+                            comparison
+                        )
 
-                    # Direction 2:
-                    # Polymarket B + sportsbook A
+                    # --------------------------------
+                    # Direction 2
+                    #
+                    # Polymarket Team B
+                    # +
+                    # Sportsbook Team A
+                    # --------------------------------
+
                     combinations += 1
 
-                    arb = calculate_arb(
+                    comparison = make_comparison(
+                        poly,
+                        team_b,
                         poly_b,
+                        team_a,
                         odds[team_a],
+                        book_name,
                     )
 
-                    if arb and arb["roi"] >= MIN_ARB_ROI:
+                    all_comparisons.append(
+                        comparison
+                    )
 
-                        opportunities.append({
-                            "game": poly["title"],
-                            "poly_team": team_b,
-                            "poly_price": poly_b,
-                            "book_team": team_a,
-                            "book_odds": odds[team_a],
-                            "book": bookmaker["title"],
-                            **arb,
-                        })
+                    if (
+                        comparison["roi"]
+                        >= MIN_ARB_ROI
+                    ):
+                        opportunities.append(
+                            comparison
+                        )
+
+    # Highest theoretical ROI first.
+
+    all_comparisons.sort(
+        key=lambda x: x["roi"],
+        reverse=True,
+    )
 
     opportunities.sort(
         key=lambda x: x["roi"],
         reverse=True,
     )
 
-    print(f"Matched NFL games: {matched_games}")
-    print(f"Combinations checked: {combinations}")
     print(
-        f"Paper arbitrages >= {MIN_ARB_ROI * 100:.2f}%: "
+        f"Matched NFL games: "
+        f"{matched_games}"
+    )
+
+    print(
+        f"Combinations checked: "
+        f"{combinations}"
+    )
+
+    print(
+        f"Paper arbitrages >= "
+        f"{MIN_ARB_ROI * 100:.2f}%: "
         f"{len(opportunities)}"
     )
 
     print()
 
+    # ------------------------------------
+    # TOP COMPARISONS
+    # ------------------------------------
+
+    print(
+        f"TOP {TOP_RESULTS} "
+        "CROSS-MARKET COMPARISONS"
+    )
+
+    print("=" * 70)
+
+    if not all_comparisons:
+
+        print(
+            "No valid comparisons found."
+        )
+
+    else:
+
+        for i, x in enumerate(
+            all_comparisons[:TOP_RESULTS],
+            start=1,
+        ):
+
+            print()
+
+            print(
+                f"{i}. {x['game']}"
+            )
+
+            print(
+                f"   Polymarket "
+                f"{x['poly_team']}: "
+                f"${x['poly_price']:.3f}"
+            )
+
+            print(
+                f"   {x['book']} "
+                f"{x['book_team']}: "
+                f"{x['book_odds']:+d}"
+            )
+
+            print(
+                f"   Theoretical ROI: "
+                f"{x['roi'] * 100:+.2f}%"
+            )
+
+    print()
+    print("=" * 70)
+
+    # ------------------------------------
+    # PAPER ARBITRAGES >= THRESHOLD
+    # ------------------------------------
+
     if not opportunities:
-        print("NO PAPER ARBITRAGES FOUND.")
+
+        print(
+            "NO PAPER ARBITRAGES "
+            f">= {MIN_ARB_ROI * 100:.2f}% FOUND."
+        )
+
         return
 
     print("PAPER ARBITRAGES FOUND")
@@ -342,27 +552,37 @@ def main():
     for x in opportunities:
 
         print()
-        print(f"GAME: {x['game']}")
+
         print(
-            f"Polymarket: {x['poly_team']} "
+            f"GAME: {x['game']}"
+        )
+
+        print(
+            f"Polymarket: "
+            f"{x['poly_team']} "
             f"@ ${x['poly_price']:.3f}"
         )
 
         print(
-            f"{x['book']}: {x['book_team']} "
+            f"{x['book']}: "
+            f"{x['book_team']} "
             f"@ {x['book_odds']:+d}"
         )
 
         print()
-        print(f"Total paper stake: ${PAPER_STAKE:.2f}")
 
         print(
-            f"  Polymarket stake: "
+            f"Total paper stake: "
+            f"${PAPER_STAKE:.2f}"
+        )
+
+        print(
+            f"Polymarket stake: "
             f"${x['poly_stake']:.2f}"
         )
 
         print(
-            f"  Sportsbook stake: "
+            f"Sportsbook stake: "
             f"${x['sportsbook_stake']:.2f}"
         )
 
@@ -377,7 +597,8 @@ def main():
         )
 
         print(
-            f"ROI: {x['roi'] * 100:.2f}%"
+            f"ROI: "
+            f"{x['roi'] * 100:.2f}%"
         )
 
         print("-" * 70)
