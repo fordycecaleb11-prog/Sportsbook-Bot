@@ -16,11 +16,9 @@ ODDS_URL = (
 
 NFL_SERIES_ID = 12185
 
-# Paper-testing settings
-MIN_ARB_ROI = 0.01       # 1.00%
+MIN_ARB_ROI = 0.01
 PAPER_STAKE = 100.00
 TOP_RESULTS = 10
-
 
 TEAM_MAP = {
     "49ers": "San Francisco 49ers",
@@ -59,8 +57,6 @@ TEAM_MAP = {
 
 
 def american_decimal(odds):
-    """Convert American odds to decimal odds."""
-
     if odds > 0:
         return 1 + (odds / 100)
 
@@ -68,8 +64,6 @@ def american_decimal(odds):
 
 
 def parse_time(value):
-    """Convert API timestamps to UTC datetime objects."""
-
     if not value:
         return None
 
@@ -90,7 +84,6 @@ def parse_time(value):
 
 
 def get_polymarket_games():
-    """Get active NFL moneyline markets from Polymarket."""
 
     params = {
         "series_id": NFL_SERIES_ID,
@@ -109,6 +102,12 @@ def get_polymarket_games():
 
     games = []
 
+    print()
+    print("POLYMARKET CLOB TOKEN DIAGNOSTIC")
+    print("=" * 70)
+
+    diagnostic_count = 0
+
     for event in response.json():
 
         for market in event.get("markets", []):
@@ -122,6 +121,7 @@ def get_polymarket_games():
             try:
                 outcomes = market.get("outcomes")
                 prices = market.get("outcomePrices")
+                token_ids = market.get("clobTokenIds")
 
                 if isinstance(outcomes, str):
                     outcomes = json.loads(outcomes)
@@ -129,11 +129,41 @@ def get_polymarket_games():
                 if isinstance(prices, str):
                     prices = json.loads(prices)
 
+                if isinstance(token_ids, str):
+                    token_ids = json.loads(token_ids)
+
                 if len(outcomes) != 2:
                     continue
 
                 if len(prices) != 2:
                     continue
+
+                # Print only the first 3 moneyline markets
+                # so the GitHub output doesn't get flooded.
+                if diagnostic_count < 3:
+
+                    print()
+                    print(
+                        "GAME:",
+                        event.get("title")
+                    )
+
+                    print(
+                        "OUTCOMES:",
+                        outcomes
+                    )
+
+                    print(
+                        "DISPLAY PRICES:",
+                        prices
+                    )
+
+                    print(
+                        "CLOB TOKEN IDS:",
+                        token_ids
+                    )
+
+                    diagnostic_count += 1
 
                 team_a = TEAM_MAP.get(outcomes[0])
                 team_b = TEAM_MAP.get(outcomes[1])
@@ -161,6 +191,7 @@ def get_polymarket_games():
                         price_a,
                         price_b,
                     ],
+                    "token_ids": token_ids,
                     "start": parse_time(
                         market.get("gameStartTime")
                         or event.get("endDate")
@@ -174,11 +205,13 @@ def get_polymarket_games():
             ):
                 continue
 
+    print()
+    print("=" * 70)
+
     return games
 
 
 def get_sportsbook_games():
-    """Get current NFL moneylines from sportsbooks."""
 
     params = {
         "apiKey": ODDS_API_KEY,
@@ -199,7 +232,6 @@ def get_sportsbook_games():
 
 
 def same_game(poly, book):
-    """Verify that both feeds refer to the same game."""
 
     poly_teams = set(poly["teams"])
 
@@ -222,8 +254,6 @@ def same_game(poly, book):
             (poly_time - book_time).total_seconds()
         )
 
-        # Reject games whose listed start times
-        # differ by more than 3 hours.
         if difference > 10800:
             return False
 
@@ -231,21 +261,11 @@ def same_game(poly, book):
 
 
 def calculate_comparison(poly_price, american_odds):
-    """
-    Calculate the theoretical return from:
-
-    1. Buying one outcome on Polymarket
-    2. Betting the opposite outcome at a sportsbook
-
-    Stakes are sized so either outcome produces
-    the same gross payout.
-    """
 
     decimal_odds = american_decimal(
         american_odds
     )
 
-    # Cost required to guarantee $1 of payout.
     cost_per_dollar = (
         poly_price
         + (1 / decimal_odds)
@@ -293,7 +313,6 @@ def make_comparison(
     book_odds,
     bookmaker,
 ):
-    """Create one cross-market comparison."""
 
     result = calculate_comparison(
         poly_price,
@@ -315,7 +334,7 @@ def main():
 
     print(
         "POLYMARKET × SPORTSBOOK "
-        "PAPER ARB SCANNER V2"
+        "PAPER ARB SCANNER"
     )
 
     print("=" * 70)
@@ -323,6 +342,7 @@ def main():
     poly_games = get_polymarket_games()
     book_games = get_sportsbook_games()
 
+    print()
     print(
         f"Polymarket moneylines: "
         f"{len(poly_games)}"
@@ -391,14 +411,7 @@ def main():
                         "Unknown",
                     )
 
-                    # --------------------------------
                     # Direction 1
-                    #
-                    # Polymarket Team A
-                    # +
-                    # Sportsbook Team B
-                    # --------------------------------
-
                     combinations += 1
 
                     comparison = make_comparison(
@@ -422,14 +435,7 @@ def main():
                             comparison
                         )
 
-                    # --------------------------------
                     # Direction 2
-                    #
-                    # Polymarket Team B
-                    # +
-                    # Sportsbook Team A
-                    # --------------------------------
-
                     combinations += 1
 
                     comparison = make_comparison(
@@ -452,8 +458,6 @@ def main():
                         opportunities.append(
                             comparison
                         )
-
-    # Highest theoretical ROI first.
 
     all_comparisons.sort(
         key=lambda x: x["roi"],
@@ -483,10 +487,6 @@ def main():
 
     print()
 
-    # ------------------------------------
-    # TOP COMPARISONS
-    # ------------------------------------
-
     print(
         f"TOP {TOP_RESULTS} "
         "CROSS-MARKET COMPARISONS"
@@ -494,48 +494,36 @@ def main():
 
     print("=" * 70)
 
-    if not all_comparisons:
+    for i, x in enumerate(
+        all_comparisons[:TOP_RESULTS],
+        start=1,
+    ):
+
+        print()
 
         print(
-            "No valid comparisons found."
+            f"{i}. {x['game']}"
         )
 
-    else:
+        print(
+            f"   Polymarket "
+            f"{x['poly_team']}: "
+            f"${x['poly_price']:.3f}"
+        )
 
-        for i, x in enumerate(
-            all_comparisons[:TOP_RESULTS],
-            start=1,
-        ):
+        print(
+            f"   {x['book']} "
+            f"{x['book_team']}: "
+            f"{x['book_odds']:+d}"
+        )
 
-            print()
-
-            print(
-                f"{i}. {x['game']}"
-            )
-
-            print(
-                f"   Polymarket "
-                f"{x['poly_team']}: "
-                f"${x['poly_price']:.3f}"
-            )
-
-            print(
-                f"   {x['book']} "
-                f"{x['book_team']}: "
-                f"{x['book_odds']:+d}"
-            )
-
-            print(
-                f"   Theoretical ROI: "
-                f"{x['roi'] * 100:+.2f}%"
-            )
+        print(
+            f"   Theoretical ROI: "
+            f"{x['roi'] * 100:+.2f}%"
+        )
 
     print()
     print("=" * 70)
-
-    # ------------------------------------
-    # PAPER ARBITRAGES >= THRESHOLD
-    # ------------------------------------
 
     if not opportunities:
 
@@ -552,10 +540,7 @@ def main():
     for x in opportunities:
 
         print()
-
-        print(
-            f"GAME: {x['game']}"
-        )
+        print(f"GAME: {x['game']}")
 
         print(
             f"Polymarket: "
@@ -568,8 +553,6 @@ def main():
             f"{x['book_team']} "
             f"@ {x['book_odds']:+d}"
         )
-
-        print()
 
         print(
             f"Total paper stake: "
