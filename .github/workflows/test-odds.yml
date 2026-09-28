@@ -1,10 +1,14 @@
-name: Test Sportsbook Odds
+name: NFL Paper Arb Scanner
 
 on:
   workflow_dispatch:
 
+  schedule:
+    # Every hour
+    - cron: "0 * * * *"
+
 jobs:
-  test-odds:
+  scan:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,7 +23,17 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Test sportsbook API
+      - name: Run paper scanner
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python paper_bot.py
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-arb-scan-${{ github.run_id }}
+          path: |
+            scan_results.csv
+            paper_trades.csv
+          if-no-files-found: ignore
