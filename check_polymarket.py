@@ -47,3 +47,4 @@ for market in found:
     print("-" * 70)
 
 print("\nPolymarket connection successful.")
+
