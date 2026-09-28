@@ -1,41 +1,79 @@
 import requests
 import json
 
-SPORTS_URL = "https://gamma-api.polymarket.com/sports"
-MARKET_TYPES_URL = "https://gamma-api.polymarket.com/sports/market-types"
+URL = "https://gamma-api.polymarket.com/events"
 
-print("Fetching Polymarket sports metadata...\n")
+params = {
+    "series_id": 12185,
+    "active": "true",
+    "closed": "false",
+    "limit": 100,
+}
 
-sports_response = requests.get(SPORTS_URL, timeout=30)
-sports_response.raise_for_status()
+response = requests.get(URL, params=params, timeout=30)
+response.raise_for_status()
 
-sports = sports_response.json()
+events = response.json()
 
-print(f"Found {len(sports)} sports.\n")
+print(f"Found {len(events)} NFL series events.\n")
 
-# Find anything that appears to be NFL / American football
-nfl_results = []
+moneyline_count = 0
 
-for sport in sports:
-    text = json.dumps(sport).lower()
+for event in events:
 
-    if "nfl" in text:
-        nfl_results.append(sport)
+    moneyline_markets = []
 
-print(f"Found {len(nfl_results)} NFL metadata entries.\n")
+    for market in event.get("markets", []):
 
-for sport in nfl_results:
+        market_type = market.get("sportsMarketType")
+
+        if market_type != "moneyline":
+            continue
+
+        if market.get("closed") is True:
+            continue
+
+        outcomes = market.get("outcomes")
+        prices = market.get("outcomePrices")
+
+        try:
+            if isinstance(outcomes, str):
+                outcomes = json.loads(outcomes)
+
+            if isinstance(prices, str):
+                prices = json.loads(prices)
+
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        moneyline_markets.append({
+            "question": market.get("question"),
+            "outcomes": outcomes,
+            "prices": prices,
+            "type": market_type,
+            "start": market.get("gameStartTime"),
+        })
+
+    if not moneyline_markets:
+        continue
+
     print("=" * 70)
-    print(json.dumps(sport, indent=2))
+    print("EVENT:", event.get("title"))
+    print("SLUG:", event.get("slug"))
+    print("START:", event.get("startDate"))
+    print("END:", event.get("endDate"))
 
+    for market in moneyline_markets:
 
-print("\nFetching valid sports market types...\n")
+        moneyline_count += 1
 
-types_response = requests.get(MARKET_TYPES_URL, timeout=30)
-types_response.raise_for_status()
+        print()
+        print("  TYPE:", market["type"])
+        print("  QUESTION:", market["question"])
+        print("  OUTCOMES:", market["outcomes"])
+        print("  PRICES:", market["prices"])
+        print("  GAME START:", market["start"])
 
-market_types = types_response.json()
-
-print(json.dumps(market_types, indent=2))
-
-print("\nDiagnostic complete.")
+print("\n" + "=" * 70)
+print(f"Found {moneyline_count} active NFL moneyline markets.")
+print("Diagnostic complete.")
